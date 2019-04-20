@@ -1,0 +1,7 @@
+#!/bin/bash
+
+set -e
+
+snapctl stop --disable "${SNAP_NAME}.synapse"
+
+snapctl stop --disable "${SNAP_NAME}.mautrix-whatsapp"

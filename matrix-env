@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -e
+
+SERVER_CONFIG_FILE="$SNAP_COMMON/homeserver.yaml"
+SERVER_NAME="$(snapctl get server.name)"
+
+export SERVER_CONFIG_FILE
+export SERVER_NAME

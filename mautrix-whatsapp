@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -e
+
+BRIDGE_CONFIG_DIR="${SNAP_COMMON}/bridges/mautrix-whatsapp"
+
+
+# Switch to SNAP_DATA to make it the working directory
+cd "${BRIDGE_CONFIG_DIR}"
+exec "${SNAP}/bin/mautrix-whatsapp"

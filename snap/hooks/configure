@@ -1,0 +1,239 @@
+#!/usr/bin/python3
+
+import os
+import re
+import subprocess
+from typing import Optional, Pattern, Set
+
+import yaml
+
+
+_SNAP_NAME = os.getenv("SNAP_NAME")
+_SNAP_PATH = os.getenv("SNAP")
+_SNAP_DATA = os.getenv("SNAP_DATA")
+_SNAP_COMMON = os.getenv("SNAP_COMMON")
+_SNAP_CURRENT = os.path.join(os.path.dirname(_SNAP_DATA), "current")
+
+
+def start_service(service_name: str, *, enable: bool) -> None:
+    cmd = ["snapctl", "start"]
+    if enable:
+        cmd.append("--enable")
+    cmd.append("{}.{}".format(_SNAP_NAME, service_name))
+    subprocess.check_call(cmd)
+
+
+def stop_service(service_name: str, *, disable: bool) -> None:
+    cmd = ["snapctl", "stop"]
+    if disable:
+        cmd.append("--disable")
+    cmd.append("{}.{}".format(_SNAP_NAME, service_name))
+    subprocess.check_call(cmd)
+
+
+def get_config(key: str) -> str:
+    return subprocess.check_output(["snapctl", "get", key]).decode().strip()
+
+
+def set_config(key: str, value: str) -> None:
+    subprocess.check_call(["snapctl", "set", "{}={}".format(key, value)])
+
+
+def search_and_replace_contents(
+    file_path: str, search_pattern: Pattern, replacement: str
+) -> None:
+    """Search file and replace any occurrence of pattern with replacement.
+
+    :param str file_path: Path of file to be searched.
+    :param re.RegexObject search_pattern: Pattern for which to search.
+    :param str replacement: The string to replace pattern.
+    """
+    with open(file_path, "r+") as f:
+        original = f.read()
+        replaced = search_pattern.sub(replacement, original)
+        if replaced != original:
+            f.seek(0)
+            f.truncate()
+            f.write(replaced)
+
+
+class SynapseServer:
+    _HOMESERVER_FILE = os.path.join(_SNAP_COMMON, "homeserver.yaml")
+
+    @property
+    def server_name(self):
+        if self._server_name is not None:
+            return self._server_name
+
+        self._server_name = get_config("server.name")
+
+        return self._server_name
+
+    @property
+    def is_server_stats(self) -> bool:
+        if self._is_server_stats is not None:
+            return self._is_server_stats
+
+        state = get_config("server.stats.enabled")
+        if not state or state != "yes":
+            self._is_server_stats = False
+        else:
+            self._is_server_stats = True
+
+        return self._is_server_stats
+
+    def __init__(self):
+        self._server_name: str = None
+        self._is_server_stats: bool = None
+
+    def _get_is_server_configured(self) -> bool:
+        return os.path.exists(self._HOMESERVER_FILE)
+
+    def _update_properties(self, app_service_config_files: Set[str]) -> bool:
+        with open(self._HOMESERVER_FILE) as homeserver_file:
+            homeserver_yaml = yaml.safe_load(stream=homeserver_file)
+        changed_properties = False
+
+        if homeserver_yaml["server_name"] != self.server_name:
+            changed_properties = True
+            homeserver_yaml["server_name"] = self.server_name
+
+        media_store_path = os.path.join(_SNAP_COMMON, "media_store")
+        if homeserver_yaml["media_store_path"] != media_store_path:
+            changed_properties = True
+            homeserver_yaml["media_store_path"] = media_store_path
+
+        uploads_path = os.path.join(_SNAP_COMMON, "uploads")
+        if homeserver_yaml["uploads_path"] != uploads_path:
+            changed_properties = True
+            homeserver_yaml["uploads_path"] = uploads_path
+
+        if app_service_config_files:
+            changed_properties = True
+            homeserver_yaml["app_service_config_files"] = list(app_service_config_files)
+
+        if changed_properties:
+            with open(self._HOMESERVER_FILE, "w") as homeserver_file:
+                yaml.safe_dump(homeserver_yaml, stream=homeserver_file)
+
+        return changed_properties
+
+    def _initial_setup(self, app_service_config_files: Set[str]) -> None:
+        cmd = [
+            os.path.join(_SNAP_PATH, "usr", "bin", "python3"),
+            "-B",
+            "-m",
+            "synapse.app.homeserver",
+            "--server-name",
+            self.server_name,
+            "-c",
+            self._HOMESERVER_FILE,
+            "--generate-config",
+        ]
+        if self.is_server_stats:
+            cmd.extend(["--report-stats", "yes"])
+        else:
+            cmd.extend(["--report-stats", "no"])
+        subprocess.check_call(cmd, cwd=_SNAP_COMMON)
+        search_and_replace_contents(
+            self._HOMESERVER_FILE,
+            re.compile(r"{}".format(_SNAP_DATA)),
+            _SNAP_CURRENT)
+        self._update_properties(app_service_config_files)
+
+    def configure(self, *, app_service_config_files: Set[str]) -> None:
+        if not self._get_is_server_configured():
+            try:
+                self._initial_setup(app_service_config_files)
+            except Exception:
+                if os.path.exists(self._HOMESERVER_FILE):
+                    os.unlink(self._HOMESERVER_FILE)
+                raise
+            start_service("synapse", enable=True)
+        else:
+            changed_properties = self._update_properties(app_service_config_files)
+            if changed_properties:
+                stop_service("synapse", disable=False)
+                start_service("synapse", enable=False)
+
+
+def _get_bridge_config_path(bridge_name: str) -> str:
+    return os.path.join(_SNAP_COMMON, "bridges", bridge_name)
+
+
+def _get_bridge_data_path(bridge_name: str) -> str:
+    return os.path.join(_SNAP_CURRENT, "bridges", bridge_name)
+
+
+class MautrixWhatsapp:
+    @property
+    def is_enabled(self) -> bool:
+        if self._is_enabled is not None:
+            return self._is_enabled
+
+        state = get_config("bridge.mautrix-whatsapp.enabled")
+        if not state or state != "yes":
+            self._is_enabled = False
+        else:
+            self._is_enabled = True
+
+        return self._is_enabled
+
+    @property
+    def registration_file(self) -> str:
+        return self._registration_file
+
+    def __init__(self, synapse_server) -> None:
+        self._synapse_server = synapse_server
+        self._name = "mautrix-whatsapp"
+        self._is_enabled = None
+        self._config_file = os.path.join(_get_bridge_config_path(self._name), "config.yaml")
+        self._registration_file = os.path.join(_get_bridge_config_path(self._name), "registration.yaml")
+        self._example_config_file = os.path.join(_SNAP_PATH, "bridges", self._name, "example-config.yaml")
+
+    def configure(self):
+        if os.path.exists(self._config_file):
+            return
+
+        data_path = _get_bridge_data_path(self._name)
+        os.makedirs(data_path)
+        with open (self._example_config_file) as example_config_file:
+            config_yaml = yaml.safe_load(stream=example_config_file)
+        config_yaml["homeserver"]["domain"] = self._synapse_server.server_name
+        config_yaml["homeserver"]["address"] = "https://{}".format(self._synapse_server.server_name)
+        config_yaml["appservice"]["database"]["uri"] = os.path.join(data_path, "{}.db".format(self._name))
+        config_yaml["appservice"]["state_store_path"] = os.path.join(data_path, "mx-state.json")
+        os.makedirs(_get_bridge_config_path(self._name), exist_ok=True)
+        with open(self._config_file, "w") as config_file:
+            yaml.safe_dump(config_yaml, stream=config_file)
+        subprocess.check_call(
+            [
+                os.path.join(_SNAP_PATH, "bin", "mautrix-whatsapp"),
+                "--config",
+                self._config_file,
+                "--registration",
+                self._registration_file,
+                "--generate-registration",
+            ]
+        )
+        start_service(self._name, enable=True)
+
+
+def main() -> None:
+    synapse_server = SynapseServer()
+    if synapse_server.server_name == "":
+        print("Noting to do")
+        return
+
+    # Now setup the bridges
+    config_files: Set[str] = set()
+    mautrix_whatsapp = MautrixWhatsapp(synapse_server)
+    if mautrix_whatsapp.is_enabled:
+        mautrix_whatsapp.configure()
+        config_files.add(mautrix_whatsapp.registration_file)
+
+    # Finally configure synapse taking into account the bridges
+    synapse_server.configure(app_service_config_files=config_files)
+
+
+main()
