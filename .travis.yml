@@ -1,0 +1,22 @@
+dist: xenial
+language: bash
+
+addons:
+  snaps:
+    - name: snapcraft
+      channel: beta/remote-build
+      confinement: classic
+
+before_script:
+  - mkdir -p ~/.ssh
+  - chmod 700 ~/.ssh
+  - echo "$SSH_KEY" | base64 -d > ~/.ssh/id_rsa
+  - ssh-keyscan -H git.launchpad.net >> ~/.ssh/known_hosts
+  - chmod 600 ~/.ssh/*
+  - chown -R $USER ~/.ssh
+  - mkdir -p ~/.local/share/snapcraft/launchpad
+  - echo "$LAUNCHPAD_CREDENTIALS" | base64 -d > ~/.local/share/snapcraft/launchpad/credentials
+  - chmod 600 ~/.local/share/snapcraft/launchpad/credentials
+
+script:
+  - travis_wait & snapcraft remote-build --user sergiusens
