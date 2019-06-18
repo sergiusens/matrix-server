@@ -60,6 +60,9 @@ parts:
       - git
     build-packages:
       - git
+    python-packages:
+    # Workaround https://github.com/matrix-org/synapse/issues/5431
+    - jinja2
   mautrix-whatsapp:
     source: https://github.com/tulir/mautrix-whatsapp.git
     plugin: nil
