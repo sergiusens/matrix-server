@@ -104,7 +104,7 @@ class SynapseServer:
             homeserver_yaml["media_store_path"] = media_store_path
 
         uploads_path = os.path.join(_SNAP_COMMON, "uploads")
-        if homeserver_yaml["uploads_path"] != uploads_path:
+        if "upload_paths" not in homeserver_yaml or homeserver_yaml["uploads_path"] != uploads_path:
             changed_properties = True
             homeserver_yaml["uploads_path"] = uploads_path
 
@@ -120,7 +120,7 @@ class SynapseServer:
 
     def _initial_setup(self, app_service_config_files: Set[str]) -> None:
         cmd = [
-            os.path.join(_SNAP_PATH, "usr", "bin", "python3"),
+            os.path.join(_SNAP_PATH, "bin", "python"),
             "-B",
             "-m",
             "synapse.app.homeserver",
